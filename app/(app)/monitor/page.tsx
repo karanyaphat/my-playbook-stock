@@ -4,65 +4,69 @@ import { useEffect, useState, useCallback } from "react";
 import { useAuth } from "@/lib/auth-context";
 import { usePortfolioStore } from "@/stores/portfolio.store";
 import { getMonitorSettings, saveMonitorSettings } from "@/lib/firestore";
-import { computeHoldings, getCashReservePct, getCrisisLevel } from "@/lib/engine/allocator";
+import { getCashReservePct, getCrisisLevel } from "@/lib/engine/allocator";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
-import { Input } from "@/components/ui/input";
-import { Label } from "@/components/ui/label";
-import { AlertTriangle, Shield, TrendingDown, CheckCircle, RefreshCw, Save } from "lucide-react";
-import type { Holding } from "@/types";
+import { AlertTriangle, Shield, TrendingDown, CheckCircle, RefreshCw, Loader2 } from "lucide-react";
 
 export default function MonitorPage() {
   const { user } = useAuth();
-  const { activePlaybook, activePortfolio, holdings, usdThb } = usePortfolioStore();
+  const { activePlaybook, holdings } = usePortfolioStore();
+
   const [ndxCurrent, setNdxCurrent] = useState(0);
-  const [ndxATH, setNdxATH] = useState("");
-  const [athInput, setAthInput] = useState("");
+  const [ndxATH, setNdxATH] = useState(0);
   const [lastUpdated, setLastUpdated] = useState("");
   const [refreshing, setRefreshing] = useState(false);
-  const [saving, setSaving] = useState(false);
+  const [athLoading, setAthLoading] = useState(true);
 
-  const fetchPricesAndSettings = useCallback(async () => {
+  const refIndex = activePlaybook?.referenceIndex ?? "^NDX";
+
+  const fetchAll = useCallback(async () => {
     const tickers = activePlaybook
       ? [...activePlaybook.assets.map((a) => a.ticker).filter((t) => !t.startsWith("K-")),
-        activePlaybook.cashReserve.ticker ?? ""].filter(Boolean)
+         activePlaybook.cashReserve.ticker ?? ""].filter(Boolean)
       : [];
 
+    // Fetch prices + ATH + cached ATH from Firestore in parallel
     const [priceRes, settings] = await Promise.all([
-      tickers.length ? fetch(`/api/prices?tickers=${[...new Set(tickers)].join(",")}`).then((r) => r.json()) : Promise.resolve({ ndx: 0 }),
+      fetch(`/api/prices?tickers=${[...new Set(tickers)].join(",")}&athTicker=${encodeURIComponent(refIndex)}`).then((r) => r.json()),
       user ? getMonitorSettings(user.uid) : Promise.resolve(null),
     ]);
 
     if (priceRes.ndx) setNdxCurrent(priceRes.ndx);
     if (priceRes.updatedAt) setLastUpdated(new Date(priceRes.updatedAt).toLocaleTimeString("th-TH"));
-    if (settings?.referenceIndexATH) {
-      const ath = settings.referenceIndexATH[activePlaybook?.referenceIndex ?? "^NDX"] ?? 0;
-      if (ath) { setNdxATH(ath.toString()); setAthInput(ath.toString()); }
-    }
-  }, [user, activePlaybook]);
 
-  useEffect(() => { fetchPricesAndSettings(); }, [fetchPricesAndSettings]);
+    // Merge: use highest of fetched ATH vs cached ATH
+    const cachedATH = settings?.referenceIndexATH?.[refIndex] ?? 0;
+    const fetchedATH = priceRes.ath ?? 0;
+    const bestATH = Math.max(fetchedATH, cachedATH);
+
+    if (bestATH > 0) {
+      setNdxATH(bestATH);
+      // Auto-save to Firestore if fetched a new higher ATH
+      if (user && fetchedATH > cachedATH) {
+        await saveMonitorSettings(user.uid, {
+          referenceIndexATH: { [refIndex]: fetchedATH },
+        });
+      }
+    }
+    setAthLoading(false);
+  }, [user, activePlaybook, refIndex]);
+
+  useEffect(() => { fetchAll(); }, [fetchAll]);
 
   async function handleRefresh() {
     setRefreshing(true);
-    await fetchPricesAndSettings();
+    setAthLoading(true);
+    await fetchAll();
     setRefreshing(false);
   }
 
-  async function handleSaveATH() {
-    if (!user || !athInput || !activePlaybook) return;
-    setSaving(true);
-    const key = activePlaybook.referenceIndex;
-    await saveMonitorSettings(user.uid, {
-      referenceIndexATH: { [key]: parseFloat(athInput) },
-    });
-    setNdxATH(athInput);
-    setSaving(false);
-  }
-
-  const ath = parseFloat(ndxATH) || 0;
-  const drawdown = ath > 0 && ndxCurrent > 0 ? Math.max(0, ((ath - ndxCurrent) / ath) * 100) : 0;
+  // ---- Derived ----
+  const drawdown = ndxATH > 0 && ndxCurrent > 0
+    ? Math.max(0, ((ndxATH - ndxCurrent) / ndxATH) * 100)
+    : 0;
   const currentLevel = activePlaybook ? getCrisisLevel(drawdown, activePlaybook) : 0;
   const cashPct = activePlaybook ? getCashReservePct(holdings, activePlaybook) : 0;
   const trimAlerts = holdings.filter((h) => h.needsTrim);
@@ -78,16 +82,25 @@ export default function MonitorPage() {
   const floorUSD = (cashFloor / 100) * coreValueUSD;
   const deployableUSD = Math.max(0, cashValueUSD - floorUSD);
 
+  // Gauge config
+  const sortedRules = [...(activePlaybook?.crisisRules ?? [])].sort((a, b) => a.drawdownPct - b.drawdownPct);
+  const maxThreshold = sortedRules.length > 0 ? Math.max(...sortedRules.map((r) => r.drawdownPct)) + 10 : 50;
+  const gaugeFillPct = Math.min((drawdown / maxThreshold) * 100, 100);
+  const gaugeColor = currentLevel === 0 ? "#10b981" : currentLevel === 1 ? "#f59e0b" : currentLevel >= 2 ? "#ef4444" : "#f97316";
+
   return (
     <div className="flex flex-col gap-6">
       <div className="flex items-center justify-between">
-        <div><h1 className="text-2xl font-bold">Monitor</h1><p className="text-sm text-muted-foreground">แจ้งเตือนและติดตามตาม Playbook</p></div>
+        <div>
+          <h1 className="text-2xl font-bold">Monitor</h1>
+          <p className="text-sm text-muted-foreground">แจ้งเตือนและติดตามตาม Playbook</p>
+        </div>
         <Button variant="outline" size="sm" onClick={handleRefresh} disabled={refreshing} className="gap-2">
           <RefreshCw className={`w-4 h-4 ${refreshing ? "animate-spin" : ""}`} />Refresh
         </Button>
       </div>
 
-      {/* Alerts Summary */}
+      {/* Summary Cards */}
       <div className="grid grid-cols-3 gap-4">
         <Card className={trimAlerts.length > 0 ? "border-red-300" : ""}>
           <CardHeader className="flex flex-row items-center justify-between pb-2">
@@ -95,8 +108,12 @@ export default function MonitorPage() {
             <AlertTriangle className={`w-4 h-4 ${trimAlerts.length > 0 ? "text-red-500" : "text-muted-foreground"}`} />
           </CardHeader>
           <CardContent>
-            <p className={`text-2xl font-bold ${trimAlerts.length > 0 ? "text-red-500" : "text-green-600"}`}>{trimAlerts.length > 0 ? trimAlerts.length : "✓"}</p>
-            <p className="text-xs text-muted-foreground mt-1">{trimAlerts.length > 0 ? trimAlerts.map((h) => h.ticker).join(", ") : "ทุก Asset อยู่ในเกณฑ์"}</p>
+            <p className={`text-2xl font-bold ${trimAlerts.length > 0 ? "text-red-500" : "text-green-600"}`}>
+              {trimAlerts.length > 0 ? trimAlerts.length : "✓"}
+            </p>
+            <p className="text-xs text-muted-foreground mt-1">
+              {trimAlerts.length > 0 ? trimAlerts.map((h) => h.ticker).join(", ") : "ทุก Asset อยู่ในเกณฑ์"}
+            </p>
           </CardContent>
         </Card>
 
@@ -106,8 +123,12 @@ export default function MonitorPage() {
             <Shield className="w-4 h-4 text-muted-foreground" />
           </CardHeader>
           <CardContent>
-            <p className={`text-2xl font-bold ${cashLow ? "text-red-500" : cashFull ? "text-indigo-600" : "text-green-600"}`}>{cashPct.toFixed(1)}%</p>
-            <p className="text-xs text-muted-foreground mt-1">{cashLow ? "⚠️ ต่ำกว่า Floor" : cashFull ? "📤 เต็ม — Re-invest" : "✅ ปกติ"} (เป้า {cashFloor}–{cashMax}%)</p>
+            <p className={`text-2xl font-bold ${cashLow ? "text-red-500" : cashFull ? "text-indigo-600" : "text-green-600"}`}>
+              {cashPct.toFixed(1)}%
+            </p>
+            <p className="text-xs text-muted-foreground mt-1">
+              {cashLow ? "⚠️ ต่ำกว่า Floor" : cashFull ? "📤 เต็ม — Re-invest" : "✅ ปกติ"} (เป้า {cashFloor}–{cashMax}%)
+            </p>
           </CardContent>
         </Card>
 
@@ -120,7 +141,9 @@ export default function MonitorPage() {
             <p className={`text-2xl font-bold ${currentLevel === 0 ? "text-green-600" : currentLevel >= 3 ? "text-red-500" : "text-orange-500"}`}>
               {currentLevel === 0 ? "Normal" : `Level ${currentLevel}`}
             </p>
-            <p className="text-xs text-muted-foreground mt-1">{drawdown > 0 ? `-${drawdown.toFixed(1)}% จาก ATH` : "กรุณาตั้ง ATH"}</p>
+            <p className="text-xs text-muted-foreground mt-1">
+              {drawdown > 0 ? `-${drawdown.toFixed(1)}% จาก ATH` : athLoading ? "กำลังโหลด ATH..." : "ยังไม่มีข้อมูล ATH"}
+            </p>
           </CardContent>
         </Card>
       </div>
@@ -128,7 +151,9 @@ export default function MonitorPage() {
       {/* Trim Alert Details */}
       {trimAlerts.length > 0 && (
         <Card className="border-red-200 bg-red-50 dark:bg-red-950/20">
-          <CardHeader className="pb-3"><CardTitle className="text-sm text-red-700 dark:text-red-400">🔴 Trim Signal — ต้องดำเนินการ</CardTitle></CardHeader>
+          <CardHeader className="pb-3">
+            <CardTitle className="text-sm text-red-700 dark:text-red-400">🔴 Trim Signal — ต้องดำเนินการ</CardTitle>
+          </CardHeader>
           <CardContent className="flex flex-col gap-2">
             {trimAlerts.map((h) => {
               const rule = activePlaybook?.trimRules.find((r) => r.ticker === h.ticker);
@@ -145,36 +170,114 @@ export default function MonitorPage() {
 
       {/* Crisis Monitor */}
       <Card>
-        <CardHeader className="pb-3"><CardTitle className="text-base">Crisis Monitor — {activePlaybook?.referenceIndex}</CardTitle></CardHeader>
-        <CardContent className="flex flex-col gap-4">
-          <div className="grid grid-cols-3 gap-4 items-end">
-            <div className="flex flex-col gap-1.5">
-              <Label>ATH</Label>
-              <div className="flex gap-2">
-                <Input type="number" step="any" placeholder="e.g. 22000" value={athInput} onChange={(e) => setAthInput(e.target.value)} />
-                <Button size="icon" variant="outline" onClick={handleSaveATH} disabled={saving}><Save className="w-4 h-4" /></Button>
-              </div>
+        <CardHeader className="pb-2">
+          <div className="flex items-center justify-between">
+            <CardTitle className="text-base">Crisis Monitor — {refIndex}</CardTitle>
+            {lastUpdated && <span className="text-xs text-muted-foreground">อัปเดต {lastUpdated}</span>}
+          </div>
+        </CardHeader>
+        <CardContent className="flex flex-col gap-5">
+
+          {/* Price stats row */}
+          <div className="grid grid-cols-3 gap-4">
+            <div className="flex flex-col gap-1 rounded-lg border bg-muted/30 px-4 py-3">
+              <span className="text-xs text-muted-foreground flex items-center gap-1.5">
+                ATH (Auto)
+                {athLoading && <Loader2 className="w-3 h-3 animate-spin" />}
+              </span>
+              <span className="text-xl font-bold tabular-nums">
+                {ndxATH > 0 ? ndxATH.toLocaleString("en-US", { maximumFractionDigits: 2 }) : "—"}
+              </span>
+              <span className="text-[10px] text-muted-foreground">10y high • auto-updated</span>
             </div>
-            <div className="flex flex-col gap-1.5">
-              <Label>ราคาปัจจุบัน (Auto)</Label>
-              <div className="h-10 px-3 rounded-md border bg-muted flex items-center text-sm font-semibold">
+            <div className="flex flex-col gap-1 rounded-lg border bg-muted/30 px-4 py-3">
+              <span className="text-xs text-muted-foreground">ราคาปัจจุบัน</span>
+              <span className="text-xl font-bold tabular-nums">
                 {ndxCurrent > 0 ? ndxCurrent.toLocaleString("en-US", { maximumFractionDigits: 2 }) : "—"}
-              </div>
-              {lastUpdated && <p className="text-xs text-muted-foreground">อัปเดต {lastUpdated}</p>}
+              </span>
+              <span className="text-[10px] text-muted-foreground">real-time</span>
             </div>
-            <div className="flex flex-col gap-1.5">
-              <Label>Drawdown จาก ATH</Label>
-              <div className={`h-10 px-3 rounded-md border flex items-center font-bold text-sm ${drawdown > 0 ? "text-red-500 bg-red-50" : "bg-muted"}`}>
-                {ath > 0 && ndxCurrent > 0 ? `-${drawdown.toFixed(2)}%` : "—"}
-              </div>
+            <div className="flex flex-col gap-1 rounded-lg border px-4 py-3"
+              style={{ background: drawdown > 0 ? "rgb(254 242 242)" : undefined }}
+            >
+              <span className="text-xs text-muted-foreground">Drawdown จาก ATH</span>
+              <span className="text-xl font-bold tabular-nums" style={{ color: drawdown > 0 ? gaugeColor : undefined }}>
+                {ndxATH > 0 && ndxCurrent > 0 ? `-${drawdown.toFixed(2)}%` : "—"}
+              </span>
+              <span className="text-[10px]" style={{ color: drawdown > 0 ? gaugeColor : "var(--muted-foreground)" }}>
+                {currentLevel === 0 ? "ตลาดปกติ" : `Crisis Level ${currentLevel}`}
+              </span>
             </div>
           </div>
 
+          {/* Drawdown Gauge */}
+          {ndxATH > 0 && sortedRules.length > 0 && (
+            <div className="flex flex-col gap-2">
+              <div className="flex items-center justify-between text-xs text-muted-foreground">
+                <span>0% — ปกติ</span>
+                <span className="font-medium" style={{ color: gaugeColor }}>
+                  {drawdown > 0 ? `ตอนนี้ -${drawdown.toFixed(1)}%` : "ตลาดปกติ"}
+                </span>
+                <span>-{maxThreshold}%</span>
+              </div>
+
+              {/* Bar */}
+              <div className="relative h-5 bg-muted rounded-full overflow-hidden">
+                {/* Crisis zone backgrounds */}
+                {sortedRules.map((rule, i) => {
+                  const nextRule = sortedRules[i + 1];
+                  const left = (rule.drawdownPct / maxThreshold) * 100;
+                  const width = nextRule
+                    ? ((nextRule.drawdownPct - rule.drawdownPct) / maxThreshold) * 100
+                    : ((maxThreshold - rule.drawdownPct) / maxThreshold) * 100;
+                  const opacity = 0.08 + i * 0.05;
+                  return (
+                    <div key={rule.level} className="absolute top-0 h-full bg-red-500"
+                      style={{ left: `${left}%`, width: `${width}%`, opacity }} />
+                  );
+                })}
+                {/* Fill bar */}
+                <div className="absolute left-0 top-0 h-full rounded-full transition-all duration-700"
+                  style={{ width: `${gaugeFillPct}%`, backgroundColor: gaugeColor, opacity: 0.85 }} />
+                {/* Threshold tick marks */}
+                {sortedRules.map((rule) => (
+                  <div key={rule.level} className="absolute top-0 h-full w-px bg-white/70"
+                    style={{ left: `${(rule.drawdownPct / maxThreshold) * 100}%` }} />
+                ))}
+              </div>
+
+              {/* Labels under bar */}
+              <div className="relative h-5">
+                {sortedRules.map((rule) => (
+                  <div key={rule.level}
+                    className="absolute -translate-x-1/2 flex flex-col items-center"
+                    style={{ left: `${(rule.drawdownPct / maxThreshold) * 100}%` }}
+                  >
+                    <span className="text-[10px] font-semibold text-muted-foreground">L{rule.level}</span>
+                    <span className="text-[9px] text-muted-foreground">-{rule.drawdownPct}%</span>
+                  </div>
+                ))}
+              </div>
+            </div>
+          )}
+
+          {/* No ATH state */}
+          {!athLoading && ndxATH === 0 && (
+            <div className="rounded-xl border border-yellow-200 bg-yellow-50 dark:bg-yellow-950/20 p-4 text-sm text-yellow-700 dark:text-yellow-300">
+              ⚠️ ดึงข้อมูล ATH ไม่สำเร็จ — กด Refresh เพื่อลองใหม่
+            </div>
+          )}
+
+          {/* Crisis action card */}
           {currentLevel > 0 && activeCrisisRule && (
             <div className="rounded-xl border-2 border-orange-300 bg-orange-50 dark:bg-orange-950/20 p-4 flex flex-col gap-3">
               <div className="flex items-center justify-between">
-                <p className="font-semibold text-orange-700 dark:text-orange-300">Level {currentLevel} — {activeCrisisRule.description}</p>
-                <Badge className="bg-orange-500 text-white">Deploy ได้ ${deployableUSD.toLocaleString("en-US", { maximumFractionDigits: 0 })}</Badge>
+                <p className="font-semibold text-orange-700 dark:text-orange-300">
+                  Level {currentLevel} — {activeCrisisRule.description}
+                </p>
+                <Badge className="bg-orange-500 text-white">
+                  Deploy ได้ ${deployableUSD.toLocaleString("en-US", { maximumFractionDigits: 0 })}
+                </Badge>
               </div>
               <div className="grid grid-cols-2 sm:grid-cols-3 gap-3 text-sm">
                 {activeCrisisRule.allocations.map((alloc) => {
@@ -192,7 +295,7 @@ export default function MonitorPage() {
             </div>
           )}
 
-          {currentLevel === 0 && (
+          {currentLevel === 0 && ndxATH > 0 && (
             <div className="rounded-xl border border-green-200 bg-green-50 dark:bg-green-950/20 p-4 flex items-center gap-3">
               <CheckCircle className="w-5 h-5 text-green-600 shrink-0" />
               <p className="text-sm text-green-700 dark:text-green-300">ตลาดปกติ — DCA ตามแผน ไม่ต้อง Deploy Cash</p>
@@ -201,16 +304,22 @@ export default function MonitorPage() {
         </CardContent>
       </Card>
 
-      {/* Playbook Rules Reminder */}
+      {/* Trim Rules Table */}
       {activePlaybook && (
         <Card>
-          <CardHeader className="pb-3"><CardTitle className="text-sm">Trim Rules ของ Playbook</CardTitle></CardHeader>
+          <CardHeader className="pb-3">
+            <CardTitle className="text-sm">Trim Rules ของ Playbook</CardTitle>
+          </CardHeader>
           <CardContent>
             <table className="w-full text-sm">
-              <thead><tr className="text-xs text-muted-foreground border-b">
-                <th className="pb-2 text-left">Asset</th><th className="pb-2 text-right">สัดส่วนจริง</th>
-                <th className="pb-2 text-right">Trim เมื่อถึง</th><th className="pb-2 text-right">Status</th>
-              </tr></thead>
+              <thead>
+                <tr className="text-xs text-muted-foreground border-b">
+                  <th className="pb-2 text-left">Asset</th>
+                  <th className="pb-2 text-right">สัดส่วนจริง</th>
+                  <th className="pb-2 text-right">Trim เมื่อถึง</th>
+                  <th className="pb-2 text-right">Status</th>
+                </tr>
+              </thead>
               <tbody>
                 {activePlaybook.trimRules.map((rule) => {
                   const h = holdings.find((x) => x.ticker === rule.ticker);
@@ -222,7 +331,9 @@ export default function MonitorPage() {
                       <td className={`py-2 text-right font-semibold ${overLimit ? "text-red-500" : ""}`}>{pct.toFixed(1)}%</td>
                       <td className="py-2 text-right text-muted-foreground">{rule.triggerPct}%</td>
                       <td className="py-2 text-right">
-                        {overLimit ? <Badge variant="destructive" className="text-xs">TRIM</Badge> : <Badge variant="outline" className="text-xs">OK</Badge>}
+                        {overLimit
+                          ? <Badge variant="destructive" className="text-xs">TRIM</Badge>
+                          : <Badge variant="outline" className="text-xs">OK</Badge>}
                       </td>
                     </tr>
                   );

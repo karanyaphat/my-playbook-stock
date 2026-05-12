@@ -16,23 +16,47 @@ async function fetchYahooPrice(ticker: string): Promise<number | null> {
   }
 }
 
+async function fetchYahooATH(ticker: string): Promise<number | null> {
+  try {
+    const url = `https://query1.finance.yahoo.com/v8/finance/chart/${encodeURIComponent(ticker)}?interval=1wk&range=10y`;
+    const res = await fetch(url, {
+      headers: { "User-Agent": "Mozilla/5.0" },
+      next: { revalidate: 3600 }, // cache ATH 1 hour
+    });
+    if (!res.ok) return null;
+    const data = await res.json();
+    const closes: (number | null)[] = data?.chart?.result?.[0]?.indicators?.quote?.[0]?.close ?? [];
+    const ath = closes.reduce<number>((max, c) => (c != null && c > max ? c : max), 0);
+    return ath > 0 ? ath : null;
+  } catch {
+    return null;
+  }
+}
+
 export async function GET(req: NextRequest) {
   const tickers = req.nextUrl.searchParams.get("tickers")?.split(",").filter(Boolean) ?? [];
+  const athTicker = req.nextUrl.searchParams.get("athTicker");
 
   const prices: Record<string, number> = {};
 
-  // Fetch all tickers + FX + NDX in parallel
+  // Fetch asset prices + FX + NDX (+ optional ATH) in parallel
   const allSymbols = [...new Set([...tickers, "USDTHB=X", "^NDX"])];
-  const results = await Promise.all(allSymbols.map(async (t) => ({ t, p: await fetchYahooPrice(t) })));
+  const [priceResults, athValue] = await Promise.all([
+    Promise.all(allSymbols.map(async (t) => ({ t, p: await fetchYahooPrice(t) }))),
+    athTicker ? fetchYahooATH(athTicker) : Promise.resolve(null),
+  ]);
 
-  results.forEach(({ t, p }) => { if (p !== null) prices[t] = p; });
+  priceResults.forEach(({ t, p }) => { if (p !== null) prices[t] = p; });
 
   const usdThb = prices["USDTHB=X"] ?? 33;
   const ndx = prices["^NDX"] ?? 0;
 
-  // Remove FX/NDX from asset prices
   delete prices["USDTHB=X"];
   delete prices["^NDX"];
 
-  return NextResponse.json({ prices, usdThb, ndx, updatedAt: new Date().toISOString() });
+  return NextResponse.json({
+    prices, usdThb, ndx,
+    ...(athValue != null ? { ath: athValue } : {}),
+    updatedAt: new Date().toISOString(),
+  });
 }
