@@ -30,11 +30,11 @@ export default function MonitorPage() {
 
     // Fetch prices + ATH + cached ATH from Firestore in parallel
     const [priceRes, settings] = await Promise.all([
-      fetch(`/api/prices?tickers=${[...new Set(tickers)].join(",")}&athTicker=${encodeURIComponent(refIndex)}`).then((r) => r.json()),
+      fetch(`/api/prices?tickers=${[...new Set(tickers)].join(",")}&athTicker=${encodeURIComponent(refIndex)}&refTicker=${encodeURIComponent(refIndex)}`).then((r) => r.json()),
       user ? getMonitorSettings(user.uid) : Promise.resolve(null),
     ]);
 
-    if (priceRes.ndx) setNdxCurrent(priceRes.ndx);
+    if (priceRes.refPrice) setNdxCurrent(priceRes.refPrice);
     if (priceRes.updatedAt) setLastUpdated(new Date(priceRes.updatedAt).toLocaleTimeString("th-TH"));
 
     // Merge: use highest of fetched ATH vs cached ATH
