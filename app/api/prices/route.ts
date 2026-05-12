@@ -76,6 +76,11 @@ async function fetchYahooATH(ticker: string): Promise<number | null> {
   }
 }
 
+// Proxy map — ใช้ ticker อื่นแทนสำหรับ CAGR เมื่อ history สั้นเกินไป
+const CAGR_PROXY: Record<string, string> = {
+  "QQQM": "QQQ",   // QQQM (IPO 2020) → ใช้ QQQ ที่มี 10y+ history แทน
+};
+
 export async function GET(req: NextRequest) {
   const tickers = req.nextUrl.searchParams.get("tickers")?.split(",").filter(Boolean) ?? [];
   const athTicker = req.nextUrl.searchParams.get("athTicker");
@@ -94,7 +99,7 @@ export async function GET(req: NextRequest) {
     Promise.all(allSymbols.map(async (t) => ({ t, p: await fetchYahooPrice(t) }))),
     athTicker ? fetchYahooATH(athTicker) : Promise.resolve(null),
     cagrTickers.length > 0
-      ? Promise.all(cagrTickers.map(async (t) => ({ t, c: await fetchYahooCagr(t) })))
+      ? Promise.all(cagrTickers.map(async (t) => ({ t, c: await fetchYahooCagr(CAGR_PROXY[t] ?? t) })))
       : Promise.resolve([]),
   ]);
 
