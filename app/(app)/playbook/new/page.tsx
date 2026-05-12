@@ -278,9 +278,17 @@ export default function NewPlaybookPage() {
                 <Button key={t} type="button" variant={cashType === t ? "default" : "outline"} size="sm"
                   onClick={() => {
                     if (t === "TICKER") {
-                      form.setValue("cashReserve", { type: "TICKER", ticker: "", currency: "USD", floor: form.getValues("cashReserve.floor") ?? 5, max: form.getValues("cashReserve.max") ?? 15 });
+                      form.setValue("cashReserve.type", "TICKER");
+                      form.setValue("cashReserve.ticker", "");
+                      form.setValue("cashReserve.currency", "USD");
+                      form.setValue("cashReserve.cashLabel", undefined as any);
+                      form.setValue("cashReserve.cashCurrency", undefined as any);
                     } else {
-                      form.setValue("cashReserve", { type: "CASH", cashLabel: "", cashCurrency: "THB", floor: form.getValues("cashReserve.floor") ?? 5, max: form.getValues("cashReserve.max") ?? 15 });
+                      form.setValue("cashReserve.type", "CASH");
+                      form.setValue("cashReserve.cashLabel", "");
+                      form.setValue("cashReserve.cashCurrency", "THB");
+                      form.setValue("cashReserve.ticker", undefined as any);
+                      form.setValue("cashReserve.currency", undefined as any);
                     }
                   }}>
                   {t === "TICKER" ? "ETF / กองทุนตลาดเงิน" : "เงินสด (บัญชีโบรกเกอร์/ธนาคาร)"}
