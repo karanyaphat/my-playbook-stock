@@ -16,23 +16,44 @@ async function fetchYahooPrice(ticker: string): Promise<number | null> {
   }
 }
 
-// CAGR จาก monthly close ย้อนหลัง N ปี — cache 24h เพราะข้อมูลไม่เปลี่ยนบ่อย
-async function fetchYahooCagr(ticker: string, years = 10): Promise<number | null> {
+// Total Return CAGR โดยใช้ adjclose + timestamp จริงจาก Yahoo
+// รองรับ ticker ที่มีประวัติน้อยกว่า 10 ปี — ใช้เท่าที่มี
+async function fetchYahooCagr(ticker: string): Promise<number | null> {
   try {
-    const url = `https://query1.finance.yahoo.com/v8/finance/chart/${encodeURIComponent(ticker)}?interval=1mo&range=${years}y`;
+    const url = `https://query1.finance.yahoo.com/v8/finance/chart/${encodeURIComponent(ticker)}?interval=1mo&range=10y`;
     const res = await fetch(url, {
       headers: { "User-Agent": "Mozilla/5.0" },
       next: { revalidate: 86400 },
     });
     if (!res.ok) return null;
     const data = await res.json();
-    // ใช้ adjclose เพื่อให้ได้ Total Return (ราคา + ปันผล reinvested)
-    const adjcloses: (number | null)[] = data?.chart?.result?.[0]?.indicators?.adjclose?.[0]?.adjclose ?? [];
-    const valid = adjcloses.filter((c): c is number => c != null && c > 0);
-    if (valid.length < 24) return null; // ต้องมีข้อมูลอย่างน้อย 2 ปี
-    const actualYears = valid.length / 12;
-    const cagr = Math.pow(valid[valid.length - 1] / valid[0], 1 / actualYears) - 1;
-    return Math.round(cagr * 10000) / 10000; // round to 4 decimal places
+    const result = data?.chart?.result?.[0];
+    if (!result) return null;
+
+    const timestamps: number[] = result.timestamp ?? [];
+    const adjcloses: (number | null)[] = result.indicators?.adjclose?.[0]?.adjclose ?? [];
+
+    // หา index แรก และ index สุดท้ายที่มีข้อมูล (ไม่ null)
+    // ใช้ timestamp จริงคำนวณ actualYears — ไม่นับ element เพราะอาจมี null กลางชุด
+    let startIdx = -1;
+    let endIdx = -1;
+    for (let i = 0; i < adjcloses.length; i++) {
+      if (adjcloses[i] != null && adjcloses[i]! > 0 && timestamps[i] != null) {
+        if (startIdx === -1) startIdx = i;
+        endIdx = i;
+      }
+    }
+
+    if (startIdx === -1 || endIdx === startIdx) return null;
+
+    const startPrice = adjcloses[startIdx]!;
+    const endPrice = adjcloses[endIdx]!;
+    // timestamp เป็น Unix seconds
+    const actualYears = (timestamps[endIdx] - timestamps[startIdx]) / (365.25 * 24 * 3600);
+
+    if (actualYears < 0.5) return null; // ต้องมีอย่างน้อย 6 เดือน
+    const cagr = Math.pow(endPrice / startPrice, 1 / actualYears) - 1;
+    return Math.round(cagr * 10000) / 10000;
   } catch {
     return null;
   }
