@@ -387,7 +387,7 @@ export default function PlaybookPage() {
 
       {/* Document Dialog */}
       <Dialog open={!!viewingPlaybook} onOpenChange={(open) => { if (!open) setViewingPlaybook(null); }}>
-        <DialogContent className="max-w-2xl max-h-[85vh] flex flex-col">
+        <DialogContent className="max-w-4xl sm:max-w-4xl max-h-[90vh] flex flex-col">
           <DialogHeader className="flex flex-row items-start justify-between gap-4 pr-8">
             <DialogTitle className="text-lg">{viewingPlaybook?.name}</DialogTitle>
             {viewingPlaybook && (
