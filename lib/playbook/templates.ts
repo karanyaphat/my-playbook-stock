@@ -1,0 +1,103 @@
+import type { PlaybookTemplate } from "@/types";
+
+export const PLAYBOOK_TEMPLATES: PlaybookTemplate[] = [
+  {
+    id: "nasdaq-100-retirement",
+    name: "Nasdaq-100 Retirement",
+    description: "เน้น Tech Growth ระยะยาว ผสมกองทุน RMF เพื่อสิทธิภาษี เหมาะสำหรับเกษียณอายุ 55+",
+    strategy: "Nasdaq-100 Growth + Tax-Free Foundation",
+    difficulty: "INTERMEDIATE",
+    tags: ["tech", "growth", "retirement", "rmf", "nasdaq"],
+    referenceIndex: "^NDX",
+    assets: [
+      { ticker: "K-USXNDQRMF", name: "Kasikorn US Nasdaq-100 RMF", targetPct: 30, role: "Tax-Free Foundation", currency: "THB", isCashReserve: false },
+      { ticker: "QQQM",        name: "Invesco Nasdaq-100 ETF",       targetPct: 10, role: "Growth",             currency: "USD", isCashReserve: false, trimThreshold: 25 },
+      { ticker: "QQQI",        name: "Nasdaq-100 Income ETF",        targetPct: 20, role: "Monthly Cashflow",   currency: "USD", isCashReserve: false, trimThreshold: 35 },
+      { ticker: "GPIQ",        name: "Goldman Sachs Nasdaq-100 Income", targetPct: 20, role: "Monthly Cashflow", currency: "USD", isCashReserve: false, trimThreshold: 35 },
+      { ticker: "USMV",        name: "iShares Min Vol USA ETF",      targetPct: 10, role: "Diversifier",        currency: "USD", isCashReserve: false, trimThreshold: 25 },
+      { ticker: "GLDM",        name: "SPDR Gold MiniShares",         targetPct: 10, role: "Portfolio Insurance", currency: "USD", isCashReserve: false, trimThreshold: 25 },
+    ],
+    cashReserve: { type: "TICKER", ticker: "SGOV", currency: "USD", floor: 5, max: 15 },
+    crisisRules: [
+      { level: 1, drawdownPct: 10, deployCashPct: 10,  allocations: [{ ticker: "QQQM", pct: 50 }, { ticker: "QQQI", pct: 25 }, { ticker: "GPIQ", pct: 25 }], description: "เริ่มสะสมเชิงรับ" },
+      { level: 2, drawdownPct: 20, deployCashPct: 20,  allocations: [{ ticker: "QQQM", pct: 60 }, { ticker: "QQQI", pct: 20 }, { ticker: "GPIQ", pct: 20 }], description: "เพิ่มน้ำหนักเมื่อถูก" },
+      { level: 3, drawdownPct: 30, deployCashPct: 30,  allocations: [{ ticker: "QQQM", pct: 70 }, { ticker: "QQQI", pct: 15 }, { ticker: "GPIQ", pct: 15 }], description: "Aggressive Accumulation" },
+      { level: 4, drawdownPct: 40, deployCashPct: 100, allocations: [{ ticker: "QQQM", pct: 80 }, { ticker: "QQQI", pct: 10 }, { ticker: "GPIQ", pct: 10 }], description: "Maximum Aggression" },
+      { level: 5, drawdownPct: 50, deployCashPct: 100, allocations: [{ ticker: "QQQM", pct: 100 }], description: "Once-in-a-cycle Opportunity" },
+    ],
+    trimRules: [
+      { ticker: "QQQM", triggerPct: 55, trimActionPct: 5, redirectTo: "CASH_RESERVE" },
+      { ticker: "QQQI", triggerPct: 35, trimActionPct: 5, redirectTo: "CASH_RESERVE" },
+      { ticker: "GPIQ", triggerPct: 35, trimActionPct: 5, redirectTo: "CASH_RESERVE" },
+      { ticker: "USMV", triggerPct: 25, trimActionPct: 5, redirectTo: "CASH_RESERVE" },
+      { ticker: "GLDM", triggerPct: 25, trimActionPct: 5, redirectTo: "CASH_RESERVE" },
+    ],
+  },
+  {
+    id: "sp500-simple-dca",
+    name: "S&P 500 Simple DCA",
+    description: "กลยุทธ์เรียบง่าย เน้นหุ้นสหรัฐ 500 ตัวที่ใหญ่ที่สุด ผสมพันธบัตรและทองคำเพื่อลดความผันผวน",
+    strategy: "S&P 500 Core + Bond + Gold",
+    difficulty: "BEGINNER",
+    tags: ["sp500", "simple", "dca", "beginner"],
+    referenceIndex: "^GSPC",
+    assets: [
+      { ticker: "VOO",  name: "Vanguard S&P 500 ETF",    targetPct: 70, role: "Core Growth",  currency: "USD", isCashReserve: false, trimThreshold: 85 },
+      { ticker: "BND",  name: "Vanguard Total Bond ETF",  targetPct: 20, role: "Stability",    currency: "USD", isCashReserve: false },
+      { ticker: "GLDM", name: "SPDR Gold MiniShares",     targetPct: 10, role: "Hedge",        currency: "USD", isCashReserve: false },
+    ],
+    cashReserve: { type: "CASH", cashLabel: "Brokerage Cash", cashCurrency: "USD", floor: 3, max: 10 },
+    crisisRules: [
+      { level: 1, drawdownPct: 15, deployCashPct: 25,  allocations: [{ ticker: "VOO", pct: 100 }], description: "Buy the dip" },
+      { level: 2, drawdownPct: 30, deployCashPct: 50,  allocations: [{ ticker: "VOO", pct: 100 }], description: "Aggressive buy" },
+      { level: 3, drawdownPct: 40, deployCashPct: 100, allocations: [{ ticker: "VOO", pct: 100 }], description: "All-in" },
+    ],
+    trimRules: [
+      { ticker: "VOO", triggerPct: 85, trimActionPct: 5, redirectTo: "CASH_RESERVE" },
+    ],
+  },
+  {
+    id: "dividend-income",
+    name: "Dividend Income",
+    description: "เน้นสร้างกระแสเงินสดรายเดือน/ไตรมาส จาก ETF ปันผลสูง เหมาะกับผู้ต้องการ Passive Income",
+    strategy: "High Yield Dividend ETF",
+    difficulty: "BEGINNER",
+    tags: ["dividend", "income", "cashflow", "passive"],
+    referenceIndex: "^GSPC",
+    assets: [
+      { ticker: "SCHD", name: "Schwab US Dividend Equity ETF", targetPct: 40, role: "Dividend Growth", currency: "USD", isCashReserve: false, trimThreshold: 55 },
+      { ticker: "JEPI", name: "JPMorgan Equity Premium ETF",   targetPct: 35, role: "Monthly Income",  currency: "USD", isCashReserve: false, trimThreshold: 50 },
+      { ticker: "JEPQ", name: "JPMorgan Nasdaq Equity Prem",   targetPct: 25, role: "Monthly Income",  currency: "USD", isCashReserve: false, trimThreshold: 40 },
+    ],
+    cashReserve: { type: "TICKER", ticker: "SGOV", currency: "USD", floor: 5, max: 10 },
+    crisisRules: [
+      { level: 1, drawdownPct: 15, deployCashPct: 30, allocations: [{ ticker: "SCHD", pct: 50 }, { ticker: "JEPI", pct: 50 }], description: "สะสม Dividend ETF" },
+      { level: 2, drawdownPct: 30, deployCashPct: 70, allocations: [{ ticker: "SCHD", pct: 30 }, { ticker: "JEPI", pct: 40 }, { ticker: "JEPQ", pct: 30 }], description: "เพิ่ม Yield" },
+    ],
+    trimRules: [
+      { ticker: "SCHD", triggerPct: 55, trimActionPct: 5, redirectTo: "CASH_RESERVE" },
+      { ticker: "JEPI", triggerPct: 50, trimActionPct: 5, redirectTo: "CASH_RESERVE" },
+    ],
+  },
+  {
+    id: "global-diversified",
+    name: "Global Diversified",
+    description: "กระจายความเสี่ยงสูงสุด ลงทุนทั่วโลก ทั้งหุ้นสหรัฐ หุ้นต่างประเทศ พันธบัตร และทองคำ",
+    strategy: "Global Equity + Bond + Gold",
+    difficulty: "BEGINNER",
+    tags: ["global", "diversified", "low-risk", "balanced"],
+    referenceIndex: "^GSPC",
+    assets: [
+      { ticker: "VTI",  name: "Vanguard Total Stock Market",   targetPct: 40, role: "US Core",          currency: "USD", isCashReserve: false },
+      { ticker: "VXUS", name: "Vanguard Total International",  targetPct: 30, role: "International",    currency: "USD", isCashReserve: false },
+      { ticker: "BND",  name: "Vanguard Total Bond ETF",       targetPct: 20, role: "Fixed Income",     currency: "USD", isCashReserve: false },
+      { ticker: "GLDM", name: "SPDR Gold MiniShares",          targetPct: 10, role: "Safe Haven",       currency: "USD", isCashReserve: false },
+    ],
+    cashReserve: { type: "CASH", cashLabel: "Brokerage Cash", cashCurrency: "USD", floor: 2, max: 8 },
+    crisisRules: [
+      { level: 1, drawdownPct: 15, deployCashPct: 50,  allocations: [{ ticker: "VTI", pct: 70 }, { ticker: "VXUS", pct: 30 }], description: "Rebalance เข้า Equity" },
+      { level: 2, drawdownPct: 25, deployCashPct: 100, allocations: [{ ticker: "VTI", pct: 60 }, { ticker: "VXUS", pct: 40 }], description: "All-in Equity" },
+    ],
+    trimRules: [],
+  },
+];
