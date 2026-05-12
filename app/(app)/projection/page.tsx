@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useState } from "react";
+import { useEffect, useState, useRef } from "react";
 import { useAuth } from "@/lib/auth-context";
 import { usePortfolioStore } from "@/stores/portfolio.store";
 import { getProjectionSettings, saveProjectionSettings } from "@/lib/firestore";
@@ -10,13 +10,12 @@ import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Slider } from "@/components/ui/slider";
 import { LineChart, Line, XAxis, YAxis, CartesianGrid, Tooltip, ReferenceLine, ResponsiveContainer, Legend } from "recharts";
-import { Save, Info, Loader2 } from "lucide-react";
+import { Save, Info, Loader2, Pencil, Check, X } from "lucide-react";
 import type { PlaybookAsset } from "@/types";
 
 interface Settings { monthlyDCA: number; annualBonus: number; targetMonthly: number; dividendYield: number; currentAge: number; retirementAge: number; }
 const DEFAULT: Settings = { monthlyDCA: 10000, annualBonus: 50000, targetMonthly: 100000, dividendYield: 10, currentAge: 38, retirementAge: 55 };
 
-// Fallback เมื่อดึง CAGR จริงไม่ได้ (เช่น K- fund หรือ ticker ที่ Yahoo ไม่มีข้อมูล)
 function getFallbackReturn(asset: PlaybookAsset): number {
   const ticker = asset.ticker.toUpperCase();
   const role = asset.role.toLowerCase();
@@ -30,11 +29,18 @@ function getFallbackReturn(asset: PlaybookAsset): number {
   return 0.10;
 }
 
-function calcPlaybookBaseRate(assets: PlaybookAsset[], cagrMap: Record<string, number>): number {
+// Priority: custom > real CAGR > fallback estimate
+function getEffectiveRate(asset: PlaybookAsset, cagrMap: Record<string, number>, customCAGR: Record<string, number>) {
+  if (customCAGR[asset.ticker] != null) return { rate: customCAGR[asset.ticker], source: "custom" as const };
+  if (cagrMap[asset.ticker] != null) return { rate: cagrMap[asset.ticker], source: "actual" as const };
+  return { rate: getFallbackReturn(asset), source: "est" as const };
+}
+
+function calcPlaybookBaseRate(assets: PlaybookAsset[], cagrMap: Record<string, number>, customCAGR: Record<string, number>): number {
   const total = assets.reduce((s, a) => s + a.targetPct, 0);
   if (total <= 0) return 0.10;
   return assets.reduce((s, a) => {
-    const rate = cagrMap[a.ticker] ?? getFallbackReturn(a);
+    const { rate } = getEffectiveRate(a, cagrMap, customCAGR);
     return s + (a.targetPct / total) * rate;
   }, 0);
 }
@@ -70,13 +76,17 @@ export default function ProjectionPage() {
   const [saving, setSaving] = useState(false);
   const [cagrMap, setCagrMap] = useState<Record<string, number>>({});
   const [cagrLoading, setCagrLoading] = useState(true);
+  const [customCAGR, setCustomCAGR] = useState<Record<string, number>>({});
 
-  // Fetch actual CAGR for all non-K- tickers
+  // Inline edit state
+  const [editingTicker, setEditingTicker] = useState<string | null>(null);
+  const [editValue, setEditValue] = useState("");
+  const inputRef = useRef<HTMLInputElement>(null);
+
+  // Fetch real CAGR
   useEffect(() => {
     if (!activePlaybook) { setCagrLoading(false); return; }
-    const fetchableTickers = activePlaybook.assets
-      .map((a) => a.ticker)
-      .filter((t) => !t.startsWith("K-"));
+    const fetchableTickers = activePlaybook.assets.map((a) => a.ticker).filter((t) => !t.startsWith("K-"));
     if (fetchableTickers.length === 0) { setCagrLoading(false); return; }
     setCagrLoading(true);
     fetch(`/api/prices?cagrTickers=${[...new Set(fetchableTickers)].join(",")}`)
@@ -86,17 +96,21 @@ export default function ProjectionPage() {
       .finally(() => setCagrLoading(false));
   }, [activePlaybook]);
 
+  // Load settings + customCAGR from Firestore
   useEffect(() => {
     if (!user) return;
     getProjectionSettings(user.uid).then((s) => {
-      if (s) setSettings({
-        monthlyDCA: s.monthlyDCA ?? DEFAULT.monthlyDCA,
-        annualBonus: s.annualBonus ?? DEFAULT.annualBonus,
-        targetMonthly: s.targetMonthlyIncome ?? DEFAULT.targetMonthly,
-        dividendYield: s.dividendYieldPct ?? DEFAULT.dividendYield,
-        currentAge: s.currentAge ?? DEFAULT.currentAge,
-        retirementAge: s.retirementAge ?? DEFAULT.retirementAge,
-      });
+      if (s) {
+        setSettings({
+          monthlyDCA: s.monthlyDCA ?? DEFAULT.monthlyDCA,
+          annualBonus: s.annualBonus ?? DEFAULT.annualBonus,
+          targetMonthly: s.targetMonthlyIncome ?? DEFAULT.targetMonthly,
+          dividendYield: s.dividendYieldPct ?? DEFAULT.dividendYield,
+          currentAge: s.currentAge ?? DEFAULT.currentAge,
+          retirementAge: s.retirementAge ?? DEFAULT.retirementAge,
+        });
+        if (s.customCAGR) setCustomCAGR(s.customCAGR);
+      }
     });
   }, [user]);
 
@@ -110,13 +124,40 @@ export default function ProjectionPage() {
       dividendYieldPct: settings.dividendYield,
       currentAge: settings.currentAge,
       retirementAge: settings.retirementAge,
+      customCAGR,
     });
     setSaving(false);
   }
 
   function upd(k: keyof Settings, v: number) { setSettings((p) => ({ ...p, [k]: v })); }
 
-  const baseRate = calcPlaybookBaseRate(activePlaybook?.assets ?? [], cagrMap);
+  // Custom CAGR inline edit
+  function startEdit(ticker: string, currentRate: number) {
+    setEditingTicker(ticker);
+    setEditValue((currentRate * 100).toFixed(1));
+    setTimeout(() => inputRef.current?.focus(), 0);
+  }
+
+  function cancelEdit() { setEditingTicker(null); setEditValue(""); }
+
+  async function commitEdit(ticker: string) {
+    const pct = parseFloat(editValue);
+    if (isNaN(pct) || pct <= 0 || pct > 100) { cancelEdit(); return; }
+    const rate = pct / 100;
+    const updated = { ...customCAGR, [ticker]: rate };
+    setCustomCAGR(updated);
+    if (user) await saveProjectionSettings(user.uid, { customCAGR: updated });
+    cancelEdit();
+  }
+
+  async function clearCustom(ticker: string) {
+    const updated = { ...customCAGR };
+    delete updated[ticker];
+    setCustomCAGR(updated);
+    if (user) await saveProjectionSettings(user.uid, { customCAGR: updated });
+  }
+
+  const baseRate = calcPlaybookBaseRate(activePlaybook?.assets ?? [], cagrMap, customCAGR);
   const scenarios = buildScenarios(baseRate);
   const totalTHB = holdings.reduce((s, h) => s + h.currentValueTHB, 0) || 882000;
   const targetM = (settings.targetMonthly * 12) / (settings.dividendYield / 100) / 1e6;
@@ -134,7 +175,7 @@ export default function ProjectionPage() {
       {activePlaybook && (
         <div className="flex items-start gap-2 rounded-lg border bg-muted/40 px-4 py-3 text-sm">
           <Info className="w-4 h-4 mt-0.5 text-muted-foreground shrink-0" />
-          <div className="flex flex-col gap-1.5 flex-1">
+          <div className="flex flex-col gap-2 flex-1">
             <div className="flex items-center gap-2">
               <span className="font-medium">{activePlaybook.name}</span>
               {cagrLoading && <Loader2 className="w-3.5 h-3.5 animate-spin text-muted-foreground" />}
@@ -144,24 +185,79 @@ export default function ProjectionPage() {
               {" "}(weighted จาก Total Return จริง 10 ปี — ราคา + ปันผล reinvested)
               {" — "}Conservative {((baseRate - 0.03) * 100).toFixed(1)}% / Base {(baseRate * 100).toFixed(1)}% / Optimistic {((baseRate + 0.03) * 100).toFixed(1)}%
             </span>
-            {/* Per-ticker CAGR breakdown */}
+
+            {/* Per-ticker breakdown */}
             {!cagrLoading && (
-              <div className="flex flex-wrap gap-x-4 gap-y-1 mt-0.5">
+              <div className="flex flex-wrap gap-x-3 gap-y-2 mt-0.5">
                 {activePlaybook.assets.map((a) => {
-                  const real = cagrMap[a.ticker];
-                  const fallback = getFallbackReturn(a);
-                  const rate = real ?? fallback;
-                  const isReal = real != null;
+                  const { rate, source } = getEffectiveRate(a, cagrMap, customCAGR);
+                  const isEditing = editingTicker === a.ticker;
+                  const isEst = source === "est";
+                  const isCustom = source === "custom";
+
                   return (
-                    <span key={a.ticker} className="text-xs">
-                      <span className="font-medium">{a.ticker}</span>{" "}
-                      <span className={isReal ? "text-green-600 font-semibold" : "text-orange-500"}>
-                        {(rate * 100).toFixed(1)}%
-                      </span>
-                      <span className="text-muted-foreground ml-0.5">
-                        {isReal ? "(10y total return)" : "(est.)"}
-                      </span>
-                    </span>
+                    <div key={a.ticker} className="flex items-center gap-1 text-xs">
+                      <span className="font-medium">{a.ticker}</span>
+
+                      {isEditing ? (
+                        <form
+                          className="flex items-center gap-0.5"
+                          onSubmit={(e) => { e.preventDefault(); commitEdit(a.ticker); }}
+                        >
+                          <input
+                            ref={inputRef}
+                            type="number"
+                            step="0.1"
+                            min="0.1"
+                            max="100"
+                            value={editValue}
+                            onChange={(e) => setEditValue(e.target.value)}
+                            onKeyDown={(e) => { if (e.key === "Escape") cancelEdit(); }}
+                            className="w-14 text-right border rounded px-1 py-0.5 text-xs bg-background focus:outline-none focus:ring-1 focus:ring-primary"
+                          />
+                          <span className="text-muted-foreground">%</span>
+                          <button type="submit" className="text-green-600 hover:text-green-700 ml-0.5">
+                            <Check className="w-3 h-3" />
+                          </button>
+                          <button type="button" onClick={cancelEdit} className="text-muted-foreground hover:text-foreground">
+                            <X className="w-3 h-3" />
+                          </button>
+                        </form>
+                      ) : (
+                        <div className="flex items-center gap-1">
+                          <span className={
+                            isCustom ? "text-blue-600 font-semibold" :
+                            isEst    ? "text-orange-500" :
+                                       "text-green-600 font-semibold"
+                          }>
+                            {(rate * 100).toFixed(1)}%
+                          </span>
+                          <span className="text-muted-foreground">
+                            ({isCustom ? "custom" : isEst ? "est." : "10y actual"})
+                          </span>
+                          {/* แก้ได้เฉพาะ est. หรือ custom */}
+                          {(isEst || isCustom) && (
+                            <button
+                              onClick={() => startEdit(a.ticker, rate)}
+                              className="text-muted-foreground hover:text-foreground transition-colors"
+                              title="ปรับ % เอง"
+                            >
+                              <Pencil className="w-2.5 h-2.5" />
+                            </button>
+                          )}
+                          {/* ล้าง custom กลับเป็น est. */}
+                          {isCustom && (
+                            <button
+                              onClick={() => clearCustom(a.ticker)}
+                              className="text-muted-foreground hover:text-red-500 transition-colors"
+                              title="ล้างค่า custom"
+                            >
+                              <X className="w-2.5 h-2.5" />
+                            </button>
+                          )}
+                        </div>
+                      )}
+                    </div>
                   );
                 })}
               </div>

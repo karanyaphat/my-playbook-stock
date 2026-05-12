@@ -169,6 +169,7 @@ export interface ProjectionSettings {
   dividendYieldPct: number;
   currentAge: number;
   retirementAge: number;
+  customCAGR?: Record<string, number>;
   updatedAt: Timestamp;
 }
 
