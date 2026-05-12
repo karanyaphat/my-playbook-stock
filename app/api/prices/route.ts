@@ -26,8 +26,9 @@ async function fetchYahooCagr(ticker: string, years = 10): Promise<number | null
     });
     if (!res.ok) return null;
     const data = await res.json();
-    const closes: (number | null)[] = data?.chart?.result?.[0]?.indicators?.quote?.[0]?.close ?? [];
-    const valid = closes.filter((c): c is number => c != null && c > 0);
+    // ใช้ adjclose เพื่อให้ได้ Total Return (ราคา + ปันผล reinvested)
+    const adjcloses: (number | null)[] = data?.chart?.result?.[0]?.indicators?.adjclose?.[0]?.adjclose ?? [];
+    const valid = adjcloses.filter((c): c is number => c != null && c > 0);
     if (valid.length < 24) return null; // ต้องมีข้อมูลอย่างน้อย 2 ปี
     const actualYears = valid.length / 12;
     const cagr = Math.pow(valid[valid.length - 1] / valid[0], 1 / actualYears) - 1;

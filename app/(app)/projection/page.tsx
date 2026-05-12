@@ -141,7 +141,7 @@ export default function ProjectionPage() {
             </div>
             <span className="text-muted-foreground text-xs">
               Base rate: <strong className="text-foreground">{(baseRate * 100).toFixed(1)}%</strong>
-              {" "}(weighted จากผลตอบแทนจริง 10 ปี)
+              {" "}(weighted จาก Total Return จริง 10 ปี — ราคา + ปันผล reinvested)
               {" — "}Conservative {((baseRate - 0.03) * 100).toFixed(1)}% / Base {(baseRate * 100).toFixed(1)}% / Optimistic {((baseRate + 0.03) * 100).toFixed(1)}%
             </span>
             {/* Per-ticker CAGR breakdown */}
@@ -159,7 +159,7 @@ export default function ProjectionPage() {
                         {(rate * 100).toFixed(1)}%
                       </span>
                       <span className="text-muted-foreground ml-0.5">
-                        {isReal ? "(10y actual)" : "(est.)"}
+                        {isReal ? "(10y total return)" : "(est.)"}
                       </span>
                     </span>
                   );
