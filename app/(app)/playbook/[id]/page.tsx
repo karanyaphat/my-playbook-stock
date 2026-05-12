@@ -229,7 +229,13 @@ export default function EditPlaybookPage() {
             <div className="flex gap-3">
               {(["TICKER", "CASH"] as const).map((t) => (
                 <Button key={t} type="button" variant={cashType === t ? "default" : "outline"} size="sm"
-                  onClick={() => form.setValue("cashReserve.type", t)}>
+                  onClick={() => {
+                    if (t === "TICKER") {
+                      form.setValue("cashReserve", { type: "TICKER", ticker: "", currency: "USD", floor: form.getValues("cashReserve.floor") ?? 5, max: form.getValues("cashReserve.max") ?? 15 });
+                    } else {
+                      form.setValue("cashReserve", { type: "CASH", cashLabel: "", cashCurrency: "THB", floor: form.getValues("cashReserve.floor") ?? 5, max: form.getValues("cashReserve.max") ?? 15 });
+                    }
+                  }}>
                   {t === "TICKER" ? "ETF / กองทุนตลาดเงิน" : "เงินสด (บัญชีโบรกเกอร์/ธนาคาร)"}
                 </Button>
               ))}
@@ -248,7 +254,7 @@ export default function EditPlaybookPage() {
                 </>
               ) : (
                 <>
-                  <div className="flex flex-col gap-1.5"><Label>ชื่อบัญชี</Label><Input {...form.register("cashReserve.cashLabel")} placeholder="Brokerage Cash" /></div>
+                  <div className="flex flex-col gap-1.5"><Label>ชื่อบัญชี <span className="text-muted-foreground text-xs">(ไม่บังคับ)</span></Label><Input {...form.register("cashReserve.cashLabel")} placeholder="Brokerage Cash" /></div>
                   <div className="flex flex-col gap-1.5">
                     <Label>Currency</Label>
                     <Select value={form.watch("cashReserve.cashCurrency") ?? "THB"} onValueChange={(v) => { if (v) form.setValue("cashReserve.cashCurrency", v as "USD" | "THB"); }}>
@@ -380,7 +386,7 @@ export default function EditPlaybookPage() {
                 <span className="text-muted-foreground">Cash Reserve: </span>
                 {form.watch("cashReserve.type") === "TICKER"
                   ? `${form.watch("cashReserve.ticker")} (${form.watch("cashReserve.floor")}–${form.watch("cashReserve.max")}%)`
-                  : `${form.watch("cashReserve.cashLabel")} (${form.watch("cashReserve.floor")}–${form.watch("cashReserve.max")}%)`}
+                  : `เงินสด${form.watch("cashReserve.cashLabel") ? ` — ${form.watch("cashReserve.cashLabel")}` : ""} (${form.watch("cashReserve.floor")}–${form.watch("cashReserve.max")}%)`}
               </div>
               <div><span className="text-muted-foreground">Crisis Levels:</span> {form.watch("crisisRules").length}</div>
               <div><span className="text-muted-foreground">Trim Rules:</span> {form.watch("trimRules").length}</div>
