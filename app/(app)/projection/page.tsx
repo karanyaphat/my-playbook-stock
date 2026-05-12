@@ -10,13 +10,14 @@ import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Slider } from "@/components/ui/slider";
 import { LineChart, Line, XAxis, YAxis, CartesianGrid, Tooltip, ReferenceLine, ResponsiveContainer, Legend } from "recharts";
-import { Save, Info } from "lucide-react";
+import { Save, Info, Loader2 } from "lucide-react";
 import type { PlaybookAsset } from "@/types";
 
 interface Settings { monthlyDCA: number; annualBonus: number; targetMonthly: number; dividendYield: number; currentAge: number; retirementAge: number; }
 const DEFAULT: Settings = { monthlyDCA: 10000, annualBonus: 50000, targetMonthly: 100000, dividendYield: 10, currentAge: 38, retirementAge: 55 };
 
-function getAssetExpectedReturn(asset: PlaybookAsset): number {
+// Fallback เมื่อดึง CAGR จริงไม่ได้ (เช่น K- fund หรือ ticker ที่ Yahoo ไม่มีข้อมูล)
+function getFallbackReturn(asset: PlaybookAsset): number {
   const ticker = asset.ticker.toUpperCase();
   const role = asset.role.toLowerCase();
   if (ticker.startsWith("K-")) return 0.12;
@@ -29,18 +30,21 @@ function getAssetExpectedReturn(asset: PlaybookAsset): number {
   return 0.10;
 }
 
-function calcPlaybookBaseRate(assets: PlaybookAsset[]): number {
+function calcPlaybookBaseRate(assets: PlaybookAsset[], cagrMap: Record<string, number>): number {
   const total = assets.reduce((s, a) => s + a.targetPct, 0);
   if (total <= 0) return 0.10;
-  return assets.reduce((s, a) => s + (a.targetPct / total) * getAssetExpectedReturn(a), 0);
+  return assets.reduce((s, a) => {
+    const rate = cagrMap[a.ticker] ?? getFallbackReturn(a);
+    return s + (a.targetPct / total) * rate;
+  }, 0);
 }
 
 function buildScenarios(baseRate: number) {
   const pct = (r: number) => `${(r * 100).toFixed(1)}%`;
   return [
     { key: "conservative", label: `Conservative (${pct(baseRate - 0.03)})`, rate: baseRate - 0.03, color: "#94a3b8" },
-    { key: "base",         label: `Base (${pct(baseRate)})`,                rate: baseRate,         color: "#6366f1" },
-    { key: "optimistic",   label: `Optimistic (${pct(baseRate + 0.03)})`,   rate: baseRate + 0.03, color: "#10b981" },
+    { key: "base",         label: `Base (${pct(baseRate)})`,                 rate: baseRate,         color: "#6366f1" },
+    { key: "optimistic",   label: `Optimistic (${pct(baseRate + 0.03)})`,    rate: baseRate + 0.03,  color: "#10b981" },
   ];
 }
 
@@ -64,14 +68,23 @@ export default function ProjectionPage() {
   const { holdings, usdThb, activePlaybook } = usePortfolioStore();
   const [settings, setSettings] = useState<Settings>(DEFAULT);
   const [saving, setSaving] = useState(false);
+  const [cagrMap, setCagrMap] = useState<Record<string, number>>({});
+  const [cagrLoading, setCagrLoading] = useState(true);
 
-  const baseRate = calcPlaybookBaseRate(activePlaybook?.assets ?? []);
-  const scenarios = buildScenarios(baseRate);
-
-  const totalTHB = holdings.reduce((s, h) => s + h.currentValueTHB, 0) || 882000;
-  const targetM = (settings.targetMonthly * 12) / (settings.dividendYield / 100) / 1e6;
-  const data = project(totalTHB, settings, scenarios);
-  const retirePt = data.find((p) => p.age === settings.retirementAge);
+  // Fetch actual CAGR for all non-K- tickers
+  useEffect(() => {
+    if (!activePlaybook) { setCagrLoading(false); return; }
+    const fetchableTickers = activePlaybook.assets
+      .map((a) => a.ticker)
+      .filter((t) => !t.startsWith("K-"));
+    if (fetchableTickers.length === 0) { setCagrLoading(false); return; }
+    setCagrLoading(true);
+    fetch(`/api/prices?cagrTickers=${[...new Set(fetchableTickers)].join(",")}`)
+      .then((r) => r.json())
+      .then((data) => { setCagrMap(data.cagr ?? {}); })
+      .catch(() => {})
+      .finally(() => setCagrLoading(false));
+  }, [activePlaybook]);
 
   useEffect(() => {
     if (!user) return;
@@ -103,6 +116,13 @@ export default function ProjectionPage() {
 
   function upd(k: keyof Settings, v: number) { setSettings((p) => ({ ...p, [k]: v })); }
 
+  const baseRate = calcPlaybookBaseRate(activePlaybook?.assets ?? [], cagrMap);
+  const scenarios = buildScenarios(baseRate);
+  const totalTHB = holdings.reduce((s, h) => s + h.currentValueTHB, 0) || 882000;
+  const targetM = (settings.targetMonthly * 12) / (settings.dividendYield / 100) / 1e6;
+  const data = project(totalTHB, settings, scenarios);
+  const retirePt = data.find((p) => p.age === settings.retirementAge);
+
   return (
     <div className="flex flex-col gap-6">
       <div className="flex items-center justify-between">
@@ -110,16 +130,42 @@ export default function ProjectionPage() {
         <Button onClick={handleSave} disabled={saving} className="gap-2"><Save className="w-4 h-4" />{saving ? "Saving..." : "Save"}</Button>
       </div>
 
-      {/* Playbook rate info */}
+      {/* CAGR info banner */}
       {activePlaybook && (
         <div className="flex items-start gap-2 rounded-lg border bg-muted/40 px-4 py-3 text-sm">
           <Info className="w-4 h-4 mt-0.5 text-muted-foreground shrink-0" />
-          <div className="flex flex-col gap-0.5">
-            <span className="font-medium">{activePlaybook.name}</span>
-            <span className="text-muted-foreground">
-              Weighted return จาก Playbook: <strong>{(baseRate * 100).toFixed(1)}%</strong>
-              {" "}— Conservative {((baseRate - 0.03) * 100).toFixed(1)}% / Base {(baseRate * 100).toFixed(1)}% / Optimistic {((baseRate + 0.03) * 100).toFixed(1)}%
+          <div className="flex flex-col gap-1.5 flex-1">
+            <div className="flex items-center gap-2">
+              <span className="font-medium">{activePlaybook.name}</span>
+              {cagrLoading && <Loader2 className="w-3.5 h-3.5 animate-spin text-muted-foreground" />}
+            </div>
+            <span className="text-muted-foreground text-xs">
+              Base rate: <strong className="text-foreground">{(baseRate * 100).toFixed(1)}%</strong>
+              {" "}(weighted จากผลตอบแทนจริง 10 ปี)
+              {" — "}Conservative {((baseRate - 0.03) * 100).toFixed(1)}% / Base {(baseRate * 100).toFixed(1)}% / Optimistic {((baseRate + 0.03) * 100).toFixed(1)}%
             </span>
+            {/* Per-ticker CAGR breakdown */}
+            {!cagrLoading && (
+              <div className="flex flex-wrap gap-x-4 gap-y-1 mt-0.5">
+                {activePlaybook.assets.map((a) => {
+                  const real = cagrMap[a.ticker];
+                  const fallback = getFallbackReturn(a);
+                  const rate = real ?? fallback;
+                  const isReal = real != null;
+                  return (
+                    <span key={a.ticker} className="text-xs">
+                      <span className="font-medium">{a.ticker}</span>{" "}
+                      <span className={isReal ? "text-green-600 font-semibold" : "text-orange-500"}>
+                        {(rate * 100).toFixed(1)}%
+                      </span>
+                      <span className="text-muted-foreground ml-0.5">
+                        {isReal ? "(10y actual)" : "(est.)"}
+                      </span>
+                    </span>
+                  );
+                })}
+              </div>
+            )}
           </div>
         </div>
       )}
@@ -180,7 +226,8 @@ export default function ProjectionPage() {
                 <p className="text-xs text-muted-foreground">{label}</p>
                 <p className="text-xl font-bold" style={{ color }}>฿{val.toFixed(2)}M</p>
                 <p className="text-sm font-medium">~฿{monthly.toLocaleString("th-TH", { maximumFractionDigits: 0 })}/เดือน</p>
-                {hit ? <p className="text-xs text-green-600 font-medium">✅ ถึงเป้า {settings.targetMonthly.toLocaleString()}</p>
+                {hit
+                  ? <p className="text-xs text-green-600 font-medium">✅ ถึงเป้า {settings.targetMonthly.toLocaleString()}</p>
                   : <p className="text-xs text-red-500">ขาด ฿{(settings.targetMonthly - monthly).toLocaleString("th-TH", { maximumFractionDigits: 0 })}/เดือน</p>}
               </CardContent>
             </Card>
